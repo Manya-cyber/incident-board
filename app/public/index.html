@@ -106,45 +106,48 @@
             });
         }
 
-        function renderIncidents() {
-            const list = document.getElementById('incident-list');
-            if (!currentIncidents || currentIncidents.length === 0) {
-                list.innerHTML = '<p>No incidents reported. Be the first!</p>';
-                return;
-            }
-            list.innerHTML = currentIncidents.map(inc => `
-                <div class="incident">
-                    <h3>${inc.title}</h3>
-                    <p>${inc.description || ''}</p>
-                    <span class="status status-${inc.status.toLowerCase().replace(' ', '-')}">${inc.status}</span>
-                    <small style="float:right;">${new Date(inc.updated_at).toLocaleString()}</small>
-                </div>
-            `).join('');
-        }
+function renderIncidents() {
+    const list = document.getElementById('incident-list');
+    if (!currentIncidents || currentIncidents.length === 0) {
+        list.innerHTML = '<p>No incidents reported. Be the first!</p>';
+        return;
+    }
+    list.innerHTML = currentIncidents.map(inc => `
+        <div class="incident">
+            <h3>${inc.title}</h3>
+            <p>${inc.description || ''}</p>
+            <span class="status status-${inc.status.toLowerCase().replace(' ', '-')}">${inc.status}</span>
+            <small style="float:right;">
+                Reported by: <strong>${inc.created_by || 'Unknown'}</strong> | ${new Date(inc.updated_at).toLocaleString()}
+            </small>
+        </div>
+    `).join('');
+}
 
-        function createIncident() {
-            if (!token) { alert('Please login first'); return; }
-            
-            const title = document.getElementById('incident-title').value;
-            const desc = document.getElementById('incident-desc').value;
-            const status = document.getElementById('incident-status').value;
+function createIncident() {
+    if (!token) { alert('Please login first'); return; }
+    
+    const title = document.getElementById('incident-title').value;
+    const desc = document.getElementById('incident-desc').value;
+    const status = document.getElementById('incident-status').value;
 
-            if (!title) { alert('Title is required'); return; }
+    if (!title) { alert('Title is required'); return; }
 
-            const newIncident = {
-                id: Date.now().toString(), // Simple unique ID
-                title,
-                description: desc,
-                status
-            };
+    const newIncident = {
+        id: Date.now().toString(), // Simple unique ID
+        title,
+        description: desc,
+        status,
+        created_by: username  // <--- THIS IS THE LINE THAT WAS MISSING!
+    };
 
-            // Send to server via WebSocket
-            socket.emit('incident:create', newIncident);
-            
-            // Clear fields
-            document.getElementById('incident-title').value = '';
-            document.getElementById('incident-desc').value = '';
-        }
+    // Send to server via WebSocket
+    socket.emit('incident:create', newIncident);
+    
+    // Clear fields
+    document.getElementById('incident-title').value = '';
+    document.getElementById('incident-desc').value = '';
+}
 
         // Auth functions
         async function register() {

@@ -12,16 +12,19 @@ const pool = new Pool({
 
 // Function to create the table if it doesn't exist
 const createTable = async () => {
+  // Create INCIDENTS table (added created_by column)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS incidents (
       id VARCHAR(255) PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       status VARCHAR(50) DEFAULT 'Open',
       description TEXT,
+      created_by VARCHAR(100),
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
+  // Create USERS table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -33,5 +36,6 @@ const createTable = async () => {
 
   console.log('✅ PostgreSQL tables are ready');
 };
+
 // Export the pool and the init function
 module.exports = { pool, createTable };

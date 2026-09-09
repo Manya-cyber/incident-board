@@ -65,18 +65,19 @@ io.on('connection', async (socket) => {
   }
 
   // --- Listen for "CREATE" incident ---
+  // --- Listen for "CREATE" incident ---
   socket.on('incident:create', async (data) => {
     try {
-      // data = { id, title, status, description }
+      // data now includes { id, title, status, description, created_by }
       const newIncident = {
         ...data,
         updated_at: new Date().toISOString()
       };
 
-      // 1. Save to PostgreSQL (durable storage)
+      // 1. Save to PostgreSQL (durable storage) - NOW INCLUDES created_by
       await pool.query(
-        'INSERT INTO incidents (id, title, status, description, updated_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET title = $2, status = $3, description = $4, updated_at = $5',
-        [newIncident.id, newIncident.title, newIncident.status, newIncident.description, newIncident.updated_at]
+        'INSERT INTO incidents (id, title, status, description, created_by, updated_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET title = $2, status = $3, description = $4, created_by = $5, updated_at = $6',
+        [newIncident.id, newIncident.title, newIncident.status, newIncident.description, newIncident.created_by, newIncident.updated_at]
       );
 
       // 2. Update Redis (fast shared state)
@@ -94,8 +95,6 @@ io.on('connection', async (socket) => {
 
       // 3. Broadcast to everyone EXCEPT the sender
       socket.broadcast.emit('incident:updated', newIncident);
-      // Optionally send back to sender as confirmation (or you can emit to all)
-      // socket.emit('incident:updated', newIncident); // Uncomment if you want sender to update too.
 
     } catch (error) {
       console.error('Error in incident:create:', error);
