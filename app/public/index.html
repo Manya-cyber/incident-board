@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Incident Coordination Board</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f9; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .auth-section { display: flex; gap: 10px; margin-bottom: 20px; }
+        .auth-section input { padding: 8px; flex: 1; }
+        .board { margin-top: 20px; }
+        .incident { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
+        .incident h3 { margin: 0; }
+        .status { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; }
+        .status-open { background: #ffc107; color: #000; }
+        .status-in-progress { background: #17a2b8; color: #fff; }
+        .status-resolved { background: #28a745; color: #fff; }
+        .form-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        .form-row input, .form-row select, .form-row button { padding: 8px; }
+        #incident-list { margin-top: 20px; }
+        .error { color: red; }
+        .success { color: green; }
+        .logout-btn { float: right; }
+    </style>
+</head>
+<body>
+    <div class="container" id="app">
+        <h1>🚨 Incident Coordination Board</h1>
+        <p id="status-message" style="font-style: italic;">Connecting to server...</p>
+
+        <!-- Authentication Section -->
+        <div id="auth-section" class="auth-section">
+            <input type="text" id="login-username" placeholder="Username">
+            <input type="password" id="login-password" placeholder="Password">
+            <button onclick="login()">Login</button>
+            <button onclick="register()">Register</button>
+        </div>
+
+        <!-- Logged In Controls -->
+        <div id="incident-controls" style="display: none;">
+            <button class="logout-btn" onclick="logout()">Logout</button>
+            <div class="form-row">
+                <input type="text" id="incident-title" placeholder="Incident Title">
+                <input type="text" id="incident-desc" placeholder="Description">
+                <select id="incident-status">
+                    <option value="Open">Open</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Resolved">Resolved</option>
+                </select>
+                <button onclick="createIncident()">Add Incident</button>
+            </div>
+        </div>
+
+        <!-- Incident Board -->
+        <div class="board">
+            <h2>Live Incidents</h2>
+            <div id="incident-list">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        let socket;
+        let token = localStorage.getItem('token');
+        let username = localStorage.getItem('username');
+        let currentIncidents = [];
+
+        function initSocket() {
+            if (socket) socket.disconnect();
+            
+            // Connect with token in query param for authentication (optional, we'll just pass it for middleware later)
+            socket = io('http://localhost:3000', {
+                query: { token: token || '' }
+            });
+
+            socket.on('connect', () => {
+                document.getElementById('status-message').innerText = '🟢 Connected to server.';
+            });
+
+            socket.on('disconnect', () => {
+                document.getElementById('status-message').innerText = '🔴 Disconnected from server.';
+            });
+
+            // Receive initial list
+            socket.on('incidents:init', (data) => {
+                currentIncidents = data || [];
+                renderIncidents();
+            });
+
+            // Receive updates from other users
+            socket.on('incident:updated', (incident) => {
+                // Update local array
+                const index = currentIncidents.findIndex(i => i.id === incident.id);
+                if (index !== -1) {
+                    currentIncidents[index] = incident;
+                } else {
+                    currentIncidents.unshift(incident);
+                }
+                renderIncidents();
+            });
+
+            // Error handling
+            socket.on('error', (msg) => {
+                alert('Error: ' + msg.message);
+            });
+        }
+
+        function renderIncidents() {
+            const list = document.getElementById('incident-list');
+            if (!currentIncidents || currentIncidents.length === 0) {
+                list.innerHTML = '<p>No incidents reported. Be the first!</p>';
+                return;
+            }
+            list.innerHTML = currentIncidents.map(inc => `
+                <div class="incident">
+                    <h3>${inc.title}</h3>
+                    <p>${inc.description || ''}</p>
+                    <span class="status status-${inc.status.toLowerCase().replace(' ', '-')}">${inc.status}</span>
+                    <small style="float:right;">${new Date(inc.updated_at).toLocaleString()}</small>
+                </div>
+            `).join('');
+        }
+
+        function createIncident() {
+            if (!token) { alert('Please login first'); return; }
+            
+            const title = document.getElementById('incident-title').value;
+            const desc = document.getElementById('incident-desc').value;
+            const status = document.getElementById('incident-status').value;
+
+            if (!title) { alert('Title is required'); return; }
+
+            const newIncident = {
+                id: Date.now().toString(), // Simple unique ID
+                title,
+                description: desc,
+                status
+            };
+
+            // Send to server via WebSocket
+            socket.emit('incident:create', newIncident);
+            
+            // Clear fields
+            document.getElementById('incident-title').value = '';
+            document.getElementById('incident-desc').value = '';
+        }
+
+        // Auth functions
+        async function register() {
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            if (!username || !password) { alert('Enter username and password'); return; }
+
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Registration successful! Please login.');
+                } else {
+                    alert(data.error);
+                }
+            } catch(e) { alert('Error connecting to server'); }
+        }
+
+async function login() {
+    const loginUsername = document.getElementById('login-username').value;
+    const password = document.getElementById('login-password').value;
+
+    if (!loginUsername || !password) {
+        alert('Enter username and password');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: loginUsername,
+                password
+            })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('username', data.username);
+
+            token = data.token;
+            username = data.username;
+
+            document.getElementById('auth-section').style.display = 'none';
+            document.getElementById('incident-controls').style.display = 'block';
+            document.getElementById('status-message').innerText =
+                `Logged in as ${username}`;
+
+            initSocket();
+
+        } else {
+            alert(data.error);
+        }
+
+    } catch (e) {
+        console.error(e);
+        alert('Error connecting to server');
+    }
+}
+
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            token = null;
+            username = null;
+            if (socket) socket.disconnect();
+            document.getElementById('auth-section').style.display = 'flex';
+            document.getElementById('incident-controls').style.display = 'none';
+            document.getElementById('status-message').innerText = 'Logged out. Please login.';
+            document.getElementById('incident-list').innerHTML = '';
+        }
+
+        // Auto-login if token exists
+        window.onload = function() {
+            const savedToken = localStorage.getItem('token');
+            const savedUsername = localStorage.getItem('username');
+            if (savedToken && savedUsername) {
+                token = savedToken;
+                username = savedUsername;
+                document.getElementById('auth-section').style.display = 'none';
+                document.getElementById('incident-controls').style.display = 'block';
+                document.getElementById('status-message').innerText = `Logged in as ${username}`;
+                initSocket();
+            } else {
+                document.getElementById('auth-section').style.display = 'flex';
+                document.getElementById('status-message').innerText = 'Please login or register.';
+            }
+        };
+    </script>
+</body>
+</html>
