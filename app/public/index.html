@@ -70,9 +70,9 @@
             if (socket) socket.disconnect();
             
             // Connect with token in query param for authentication (optional, we'll just pass it for middleware later)
-            socket = io('http://localhost:3000', {
-                query: { token: token || '' }
-            });
+         socket = io({
+    query: { token: token || '' }
+});
 
             socket.on('connect', () => {
                 document.getElementById('status-message').innerText = '🟢 Connected to server.';

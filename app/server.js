@@ -2,10 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const { createAdapter } = require('@socket.io/redis-adapter');
 const cors = require('cors');
 const { createClient } = require('redis');
 const { pool, createTable } = require('./models/Incident');
-const authRoutes = require('./routes/auth'); // We'll make this next
+const authRoutes = require('./routes/auth');
 
 // 1. Initialize Express App
 const app = express();
@@ -19,12 +20,22 @@ const io = new Server(server, {
   }
 });
 
-// 3. Connect to Redis
-const redisClient = createClient({
+// 3. Create TWO Redis clients (one for pub, one for sub)
+const pubClient = createClient({
   url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`
 });
-redisClient.on('error', (err) => console.error('Redis error:', err));
-redisClient.connect().then(() => console.log('✅ Connected to Redis'));
+const subClient = pubClient.duplicate();
+
+pubClient.on('error', (err) => console.error('Redis Pub Error:', err));
+subClient.on('error', (err) => console.error('Redis Sub Error:', err));
+
+// Connect both and set up the Redis adapter for cross-server broadcasts
+Promise.all([pubClient.connect(), subClient.connect()])
+  .then(() => {
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('✅ Socket.io Redis adapter connected (cross-server broadcasts enabled)');
+  })
+  .catch((err) => console.error('❌ Redis adapter failed:', err));
 
 // 4. Middleware
 app.use(cors());
@@ -45,15 +56,15 @@ io.on('connection', async (socket) => {
 
   // --- Send current state to the new user ---
   try {
-    const data = await redisClient.get('incidents');
+    const data = await pubClient.get('incidents');
     if (data) {
       socket.emit('incidents:init', JSON.parse(data));
     } else {
-      // If Redis is empty, load from PostgreSQL (for disaster recovery resilience)
+      // If Redis is empty, load from PostgreSQL
       const res = await pool.query('SELECT * FROM incidents ORDER BY updated_at DESC');
       const incidents = res.rows;
       if (incidents.length > 0) {
-        await redisClient.set('incidents', JSON.stringify(incidents));
+        await pubClient.set('incidents', JSON.stringify(incidents));
         socket.emit('incidents:init', incidents);
       } else {
         socket.emit('incidents:init', []);
@@ -65,36 +76,33 @@ io.on('connection', async (socket) => {
   }
 
   // --- Listen for "CREATE" incident ---
-  // --- Listen for "CREATE" incident ---
   socket.on('incident:create', async (data) => {
     try {
-      // data now includes { id, title, status, description, created_by }
       const newIncident = {
         ...data,
         updated_at: new Date().toISOString()
       };
 
-      // 1. Save to PostgreSQL (durable storage) - NOW INCLUDES created_by
+      // 1. Save to PostgreSQL (durable storage)
       await pool.query(
         'INSERT INTO incidents (id, title, status, description, created_by, updated_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET title = $2, status = $3, description = $4, created_by = $5, updated_at = $6',
         [newIncident.id, newIncident.title, newIncident.status, newIncident.description, newIncident.created_by, newIncident.updated_at]
       );
 
       // 2. Update Redis (fast shared state)
-      let currentIncidents = await redisClient.get('incidents');
+      let currentIncidents = await pubClient.get('incidents');
       let incidentsArray = currentIncidents ? JSON.parse(currentIncidents) : [];
-      
-      // Replace or add
+
       const existingIndex = incidentsArray.findIndex(inc => inc.id === newIncident.id);
       if (existingIndex !== -1) {
         incidentsArray[existingIndex] = newIncident;
       } else {
-        incidentsArray.unshift(newIncident); // Add to top
+        incidentsArray.unshift(newIncident);
       }
-      await redisClient.set('incidents', JSON.stringify(incidentsArray));
+      await pubClient.set('incidents', JSON.stringify(incidentsArray));
 
-      // 3. Broadcast to everyone EXCEPT the sender
-      socket.broadcast.emit('incident:updated', newIncident);
+      // 3. Broadcast to EVERYONE (including sender) on ALL servers via Redis adapter
+      io.emit('incident:updated', newIncident);
 
     } catch (error) {
       console.error('Error in incident:create:', error);
